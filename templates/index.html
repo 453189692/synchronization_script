@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rsync 同步监控 - 多任务</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        h1 {
+            font-size: 1.75rem; font-weight: 700; margin-bottom: 20px;
+            color: #f1f5f9; display: flex; align-items: center; gap: 12px;
+        }
+
+        /* ===== 任务概览栏 ===== */
+        .task-overview {
+            display: flex; gap: 12px; flex-wrap: wrap;
+            margin-bottom: 20px; padding: 16px;
+            background: #1e293b; border-radius: 12px; border: 1px solid #334155;
+        }
+
+        .task-chip {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 16px; border-radius: 8px;
+            background: #334155; cursor: pointer;
+            transition: all 0.2s; border: 2px solid transparent;
+            font-size: 0.85rem;
+        }
+
+        .task-chip:hover { background: #475569; }
+        .task-chip.active { border-color: #3b82f6; background: #1e3a5f; }
+
+        .task-chip .chip-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+        }
+
+        .chip-dot-idle { background: #6ee7b7; }
+        .chip-dot-running { background: #7dd3fc; animation: pulse 2s infinite; }
+        .chip-dot-error { background: #fca5a5; }
+
+        .task-chip .chip-name { font-weight: 500; }
+
+        .btn-add-task {
+            display: flex; align-items: center; gap: 6px;
+            padding: 8px 16px; border-radius: 8px;
+            background: #064e3b; color: #6ee7b7;
+            border: 1px dashed #065f46; cursor: pointer;
+            font-size: 0.85rem; font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-add-task:hover { background: #065f46; }
+
+        /* ===== 通用 ===== */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px; margin-bottom: 24px;
+        }
+
+        .card {
+            background: #1e293b; border-radius: 12px; padding: 24px;
+            border: 1px solid #334155; transition: border-color 0.2s;
+        }
+
+        .card:hover { border-color: #475569; }
+
+        .card-title {
+            font-size: 0.875rem; font-weight: 600; color: #94a3b8;
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px;
+        }
+
+        .status-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 6px 14px; border-radius: 20px;
+            font-size: 0.875rem; font-weight: 500;
+        }
+
+        .status-idle { background: #064e3b; color: #6ee7b7; }
+        .status-running { background: #1e3a5f; color: #7dd3fc; animation: pulse 2s infinite; }
+        .status-error { background: #450a0a; color: #fca5a5; }
+
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
+        .dot { width: 8px; height: 8px; border-radius: 50%; }
+        .dot-idle { background: #6ee7b7; }
+        .dot-running { background: #7dd3fc; }
+        .dot-error { background: #fca5a5; }
+
+        .info-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 0; border-bottom: 1px solid #334155;
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { color: #94a3b8; font-size: 0.875rem; }
+        .info-value { color: #f1f5f9; font-weight: 500; font-size: 0.875rem; word-break: break-all; max-width: 60%; text-align: right; }
+
+        .btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 10px 20px; border-radius: 8px; border: none;
+            font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
+        .btn-primary:disabled { background: #475569; color: #94a3b8; cursor: not-allowed; transform: none; }
+
+        .btn-danger { background: #dc2626; color: white; }
+        .btn-danger:hover { background: #b91c1c; transform: translateY(-1px); }
+
+        .btn-refresh { background: #334155; color: #e2e8f0; }
+        .btn-refresh:hover { background: #475569; }
+
+        .btn-save { background: #16a34a; color: white; }
+        .btn-save:hover { background: #15803d; transform: translateY(-1px); }
+
+        .btn-cancel { background: #475569; color: #e2e8f0; }
+        .btn-cancel:hover { background: #64748b; }
+
+        .log-container {
+            background: #0f172a; border: 1px solid #334155; border-radius: 8px;
+            padding: 16px; max-height: 400px; overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.8rem; line-height: 1.6;
+            white-space: pre-wrap; word-break: break-all; color: #a5f3fc;
+        }
+
+        .log-container::-webkit-scrollbar { width: 6px; }
+        .log-container::-webkit-scrollbar-track { background: #1e293b; }
+        .log-container::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+
+        .full-width { grid-column: 1 / -1; }
+
+        .history-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        .history-table th {
+            text-align: left; padding: 10px 12px; border-bottom: 2px solid #334155;
+            color: #94a3b8; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.05em; font-size: 0.75rem;
+        }
+        .history-table td { padding: 10px 12px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+        .history-table tr:hover td { background: #1e293b; }
+
+        .tag-success { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #064e3b; color: #6ee7b7; font-size: 0.75rem; }
+        .tag-fail { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #450a0a; color: #fca5a5; font-size: 0.75rem; }
+
+        .disk-bar { width: 100%; height: 8px; background: #334155; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+        .disk-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+        .disk-bar-fill.low { background: #22c55e; }
+        .disk-bar-fill.medium { background: #eab308; }
+        .disk-bar-fill.high { background: #ef4444; }
+
+        .actions { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; flex-wrap: wrap; }
+
+        .toast {
+            position: fixed; top: 24px; right: 24px; padding: 12px 20px;
+            border-radius: 8px; font-size: 0.875rem; font-weight: 500;
+            z-index: 1000; transform: translateX(120%); transition: transform 0.3s ease;
+        }
+        .toast.show { transform: translateX(0); }
+        .toast-success { background: #064e3b; color: #6ee7b7; border: 1px solid #065f46; }
+        .toast-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+
+        .config-editor {
+            width: 100%; min-height: 260px; background: #0f172a;
+            border: 1px solid #334155; border-radius: 8px; padding: 16px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.8rem; line-height: 1.6; color: #e2e8f0;
+            resize: vertical; outline: none; transition: border-color 0.2s;
+        }
+        .config-editor:focus { border-color: #3b82f6; }
+
+        .config-actions { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+        .save-hint { font-size: 0.75rem; color: #64748b; }
+
+        .collapse-header {
+            display: flex; justify-content: space-between; align-items: center;
+            cursor: pointer; user-select: none;
+        }
+        .collapse-header:hover .card-title { color: #e2e8f0; }
+        .collapse-icon { font-size: 1.2rem; color: #64748b; transition: transform 0.2s; }
+        .collapse-icon.open { transform: rotate(180deg); }
+        .collapse-body { display: none; margin-top: 16px; }
+        .collapse-body.open { display: block; }
+
+        .auto-refresh { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #64748b; }
+        .auto-refresh input[type="checkbox"] { accent-color: #3b82f6; }
+
+        /* ===== 新建任务弹窗 ===== */
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7); z-index: 900;
+            justify-content: center; align-items: center;
+        }
+        .modal-overlay.show { display: flex; }
+
+        .modal {
+            background: #1e293b; border-radius: 12px; padding: 32px;
+            border: 1px solid #334155; width: 90%; max-width: 520px;
+        }
+
+        .modal h2 { font-size: 1.2rem; margin-bottom: 20px; color: #f1f5f9; }
+
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
+        .form-group input {
+            width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #334155;
+            background: #0f172a; color: #e2e8f0; font-size: 0.85rem; outline: none;
+        }
+        .form-group input:focus { border-color: #3b82f6; }
+
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+        .modal-actions { display: flex; gap: 12px; margin-top: 20px; justify-content: flex-end; }
+
+        .no-task-hint {
+            text-align: center; padding: 60px 20px; color: #64748b; font-size: 1rem;
+        }
+
+        /* Markdown 渲染样式 */
+        #docsContent h1, #docsContent h2, #docsContent h3 { color: #f1f5f9; margin-top: 1.2em; margin-bottom: 0.5em; }
+        #docsContent h1 { font-size: 1.4rem; border-bottom: 1px solid #334155; padding-bottom: 8px; }
+        #docsContent h2 { font-size: 1.2rem; border-bottom: 1px solid #334155; padding-bottom: 6px; }
+        #docsContent h3 { font-size: 1rem; }
+        #docsContent p { margin: 0.6em 0; }
+        #docsContent code { background: #334155; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+        #docsContent pre { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px 16px; overflow-x: auto; }
+        #docsContent pre code { background: none; padding: 0; }
+        #docsContent table { width: 100%; border-collapse: collapse; margin: 0.8em 0; font-size: 0.85rem; }
+        #docsContent th { background: #334155; padding: 8px 10px; text-align: left; font-weight: 600; }
+        #docsContent td { padding: 8px 10px; border-bottom: 1px solid #334155; }
+        #docsContent blockquote { border-left: 3px solid #3b82f6; padding-left: 12px; color: #94a3b8; margin: 0.8em 0; }
+        #docsContent ul, #docsContent ol { padding-left: 1.5em; margin: 0.5em 0; }
+        #docsContent li { margin: 0.3em 0; }
+        #docsContent strong { color: #f1f5f9; }
+        #docsContent a { color: #60a5fa; text-decoration: none; }
+        #docsContent a:hover { text-decoration: underline; }
+        #docsContent hr { border: none; border-top: 1px solid #334155; margin: 1.5em 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>&#x1F504; Rsync 同步监控面板 <button class="btn btn-refresh" style="font-size:0.8rem;padding:6px 14px;margin-left:auto;" onclick="showDocs()">&#x1F4D6; 文档</button></h1>
+
+        <!-- 任务概览栏 -->
+        <div class="task-overview" id="taskOverview">
+            <div class="btn-add-task" onclick="showCreateModal()">+ 新建任务</div>
+        </div>
+
+        <!-- 当前任务面板 -->
+        <div id="taskPanel" style="display:none;">
+            <div class="actions">
+                <button class="btn btn-primary" id="btnSync" onclick="triggerSync()">&#9654; 手动触发同步</button>
+                <button class="btn btn-refresh" onclick="refreshTask()">&#x21BB; 刷新</button>
+                <button class="btn btn-danger" onclick="deleteCurrentTask()">&#x2716; 删除任务</button>
+                <label class="auto-refresh">
+                    <input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()">
+                    自动刷新 (5s)
+                </label>
+            </div>
+
+            <div class="grid">
+                <!-- 状态卡片 -->
+                <div class="card">
+                    <div class="card-title">同步状态</div>
+                    <div id="statusBadge" class="status-badge status-idle">
+                        <span class="dot dot-idle"></span><span>空闲</span>
+                    </div>
+                    <p id="statusMessage" style="margin-top:12px; font-size:0.85rem; color:#94a3b8;">-</p>
+                    <p id="statusTime" style="margin-top:4px; font-size:0.8rem; color:#64748b;">-</p>
+                </div>
+
+                <!-- 配置信息 -->
+                <div class="card">
+                    <div class="card-title">同步配置</div>
+                    <div class="info-row"><span class="info-label">源地址</span><span class="info-value" id="cfgSource">-</span></div>
+                    <div class="info-row"><span class="info-label">目标路径</span><span class="info-value" id="cfgDest">-</span></div>
+                    <div class="info-row"><span class="info-label">带宽限制</span><span class="info-value" id="cfgBw">-</span></div>
+                    <div class="info-row"><span class="info-label">最大重试</span><span class="info-value" id="cfgRetry">-</span></div>
+                </div>
+
+                <!-- 磁盘信息 -->
+                <div class="card">
+                    <div class="card-title">目标磁盘空间</div>
+                    <div class="info-row"><span class="info-label">总空间</span><span class="info-value" id="diskSize">-</span></div>
+                    <div class="info-row"><span class="info-label">已用</span><span class="info-value" id="diskUsed">-</span></div>
+                    <div class="info-row"><span class="info-label">可用</span><span class="info-value" id="diskAvail">-</span></div>
+                    <div class="info-row"><span class="info-label">使用率</span><span class="info-value" id="diskPercent">-</span></div>
+                    <div class="disk-bar"><div class="disk-bar-fill low" id="diskBar" style="width:0%"></div></div>
+                </div>
+
+                <!-- 日志 -->
+                <div class="card full-width">
+                    <div class="card-title">同步日志 <span id="logFile" style="font-weight:400;color:#64748b;text-transform:none;letter-spacing:normal;"></span></div>
+                    <div class="log-container" id="logContent">暂无日志</div>
+                </div>
+
+                <!-- 历史记录 -->
+                <div class="card full-width">
+                    <div class="card-title">同步历史</div>
+                    <div style="overflow-x:auto;">
+                        <table class="history-table">
+                            <thead><tr>
+                                <th>开始时间</th><th>结束时间</th><th>耗时</th>
+                                <th>文件数</th><th>传输大小</th><th>状态</th>
+                            </tr></thead>
+                            <tbody id="historyBody">
+                                <tr><td colspan="6" style="text-align:center;color:#64748b;">暂无记录</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 配置编辑 -->
+                <div class="card full-width">
+                    <div class="collapse-header" onclick="toggleConfigEditor()">
+                        <div class="card-title" style="margin-bottom:0;">编辑任务配置</div>
+                        <span class="collapse-icon" id="configCollapseIcon">&#x25BC;</span>
+                    </div>
+                    <div class="collapse-body" id="configEditorBody">
+                        <textarea class="config-editor" id="configEditor" spellcheck="false"></textarea>
+                        <div class="config-actions">
+                            <button class="btn btn-save" onclick="saveConfig()">&#x2714; 保存配置</button>
+                            <button class="btn btn-cancel" onclick="reloadConfig()">&#x21BB; 重新加载</button>
+                            <span class="save-hint" id="configHint">修改后点击保存，下次同步生效</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 无任务提示 -->
+        <div id="noTaskHint" class="no-task-hint" style="display:none;">
+            请在上方选择一个任务，或点击"+ 新建任务"创建同步任务
+        </div>
+    </div>
+
+    <!-- 新建任务弹窗 -->
+    <div class="modal-overlay" id="createModal">
+        <div class="modal">
+            <h2>新建同步任务</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>任务ID (英文/数字/横杠)</label>
+                    <input id="newTaskId" placeholder="如: report-sync">
+                </div>
+                <div class="form-group">
+                    <label>任务名称 (显示用)</label>
+                    <input id="newTaskName" placeholder="如: 报告文件同步">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>源服务器IP</label>
+                    <input id="newSourceHost" value="192.168.1.37">
+                </div>
+                <div class="form-group">
+                    <label>源用户名</label>
+                    <input id="newSourceUser" value="root">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>源路径</label>
+                <input id="newSourcePath" placeholder="/path/to/source">
+            </div>
+            <div class="form-group">
+                <label>目标路径 (本机)</label>
+                <input id="newDestPath" placeholder="/path/to/dest">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>SSH端口</label>
+                    <input id="newSSHPort" value="22">
+                </div>
+                <div class="form-group">
+                    <label>带宽限制 (KB/s, 0=不限)</label>
+                    <input id="newBwLimit" value="50000">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="hideCreateModal()">取消</button>
+                <button class="btn btn-primary" onclick="createTask()">创建任务</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文档弹窗 -->
+    <div class="modal-overlay" id="docsModal">
+        <div class="modal" style="max-width:900px;max-height:90vh;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <h2 style="margin:0;">部署与运行手册</h2>
+                <button class="btn btn-cancel" onclick="hideDocs()">关闭</button>
+            </div>
+            <div id="docsContent" style="overflow-y:auto;flex:1;padding:4px 8px;line-height:1.7;font-size:0.9rem;"></div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        let currentTaskId = null;
+        let autoRefreshInterval = null;
+        let logFastInterval = null;
+        let tasksData = [];
+
+        // ========== 初始化 ==========
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTasks();
+            toggleAutoRefresh();
+        });
+
+        // ========== 任务列表 ==========
+        async function loadTasks() {
+            try {
+                const res = await fetch('/api/tasks');
+                tasksData = await res.json();
+                renderTaskOverview();
+
+                if (tasksData.length > 0) {
+                    if (!currentTaskId || !tasksData.find(t => t.id === currentTaskId)) {
+                        selectTask(tasksData[0].id);
+                    } else {
+                        selectTask(currentTaskId);
+                    }
+                } else {
+                    currentTaskId = null;
+                    document.getElementById('taskPanel').style.display = 'none';
+                    document.getElementById('noTaskHint').style.display = 'block';
+                }
+            } catch (e) {
+                console.error('加载任务列表失败:', e);
+            }
+        }
+
+        function renderTaskOverview() {
+            const container = document.getElementById('taskOverview');
+            const chips = tasksData.map(t => {
+                const active = t.id === currentTaskId ? ' active' : '';
+                const dotClass = 'chip-dot-' + (t.status || 'idle');
+                return '<div class="task-chip' + active + '" onclick="selectTask(\'' + t.id + '\')">' +
+                    '<span class="chip-dot ' + dotClass + '"></span>' +
+                    '<span class="chip-name">' + escapeHtml(t.name) + '</span></div>';
+            }).join('');
+            container.innerHTML = chips + '<div class="btn-add-task" onclick="showCreateModal()">+ 新建任务</div>';
+        }
+
+        function selectTask(taskId) {
+            currentTaskId = taskId;
+            document.getElementById('taskPanel').style.display = 'block';
+            document.getElementById('noTaskHint').style.display = 'none';
+            renderTaskOverview();
+            refreshTask();
+        }
+
+        // ========== 刷新当前任务数据 ==========
+        async function refreshTask() {
+            if (!currentTaskId) return;
+            await Promise.all([
+                fetchStatus(),
+                fetchDisk(),
+                fetchLogs(),
+                fetchHistory()
+            ]);
+            // 同时刷新概览栏状态
+            try {
+                const res = await fetch('/api/tasks');
+                tasksData = await res.json();
+                renderTaskOverview();
+            } catch (e) {}
+        }
+
+        function toggleAutoRefresh() {
+            const checked = document.getElementById('autoRefresh').checked;
+            if (checked) {
+                autoRefreshInterval = setInterval(() => {
+                    if (currentTaskId) refreshTask();
+                }, 5000);
+            } else {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+        }
+
+        // ========== 状态 ==========
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/status');
+                const data = await res.json();
+
+                const badge = document.getElementById('statusBadge');
+                const statusMap = {
+                    'idle': { cls: 'status-idle', dot: 'dot-idle', label: '空闲' },
+                    'running': { cls: 'status-running', dot: 'dot-running', label: '同步中' },
+                    'error': { cls: 'status-error', dot: 'dot-error', label: '错误' }
+                };
+                const s = statusMap[data.status] || statusMap['idle'];
+                badge.className = 'status-badge ' + s.cls;
+                badge.innerHTML = '<span class="dot ' + s.dot + '"></span><span>' + s.label + '</span>';
+
+                document.getElementById('statusMessage').textContent = data.message || '-';
+                document.getElementById('statusTime').textContent = data.timestamp ? '更新时间: ' + data.timestamp : '-';
+
+                // 按钮状态
+                const btn = document.getElementById('btnSync');
+                btn.disabled = data.status === 'running';
+                btn.innerHTML = data.status === 'running' ? '&#9203; 同步进行中...' : '&#9654; 手动触发同步';
+
+                // 同步中加快日志刷新
+                if (data.status === 'running') {
+                    if (!logFastInterval) {
+                        logFastInterval = setInterval(fetchLogs, 2000);
+                    }
+                } else {
+                    if (logFastInterval) {
+                        clearInterval(logFastInterval);
+                        logFastInterval = null;
+                    }
+                }
+
+                // 更新配置摘要
+                const task = tasksData.find(t => t.id === currentTaskId);
+                if (task) {
+                    document.getElementById('cfgSource').textContent = task.source || '-';
+                    document.getElementById('cfgDest').textContent = task.dest || '-';
+                }
+                // 从配置获取更多
+                const cfg = await (await fetch('/api/tasks/' + currentTaskId + '/config/raw')).json();
+                if (cfg.success) {
+                    const parsed = parseEnv(cfg.content);
+                    const bwEnabled = parsed['BANDWIDTH_ENABLED'] === 'true';
+                    document.getElementById('cfgBw').textContent = bwEnabled ? (parsed['BANDWIDTH_LIMIT'] || '50000') + ' KB/s' : '不限速';
+                    document.getElementById('cfgRetry').textContent = parsed['MAX_RETRIES'] || '3';
+                }
+            } catch (e) {
+                console.error('获取状态失败:', e);
+            }
+        }
+
+        function parseEnv(text) {
+            const result = {};
+            text.split('\n').forEach(line => {
+                line = line.trim();
+                if (line && !line.startsWith('#') && line.indexOf('=') > 0) {
+                    const idx = line.indexOf('=');
+                    const key = line.substring(0, idx).trim();
+                    let val = line.substring(idx + 1).trim();
+                    const commentIdx = val.indexOf('#');
+                    if (commentIdx > 0) val = val.substring(0, commentIdx).trim();
+                    result[key] = val;
+                }
+            });
+            return result;
+        }
+
+        // ========== 磁盘 ==========
+        async function fetchDisk() {
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/disk');
+                const data = await res.json();
+                if (!data.error) {
+                    document.getElementById('diskSize').textContent = data.size || '-';
+                    document.getElementById('diskUsed').textContent = data.used || '-';
+                    document.getElementById('diskAvail').textContent = data.available || '-';
+                    document.getElementById('diskPercent').textContent = data.use_percent || '-';
+                    const percent = parseInt(data.use_percent) || 0;
+                    const bar = document.getElementById('diskBar');
+                    bar.style.width = percent + '%';
+                    bar.className = 'disk-bar-fill ' + (percent > 85 ? 'high' : percent > 60 ? 'medium' : 'low');
+                }
+            } catch (e) {
+                console.error('获取磁盘信息失败:', e);
+            }
+        }
+
+        // ========== 日志 ==========
+        async function fetchLogs() {
+            if (!currentTaskId) return;
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/logs?lines=150');
+                const data = await res.json();
+                const container = document.getElementById('logContent');
+                container.textContent = data.content || '暂无日志';
+                container.scrollTop = container.scrollHeight;
+                document.getElementById('logFile').textContent = data.file ? '(' + data.file + ')' : '';
+            } catch (e) {
+                console.error('获取日志失败:', e);
+            }
+        }
+
+        // ========== 历史 ==========
+        async function fetchHistory() {
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/history');
+                const data = await res.json();
+                const tbody = document.getElementById('historyBody');
+                if (!data || data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;">暂无记录</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.map(item => {
+                    const duration = formatDuration(item.duration);
+                    const isSuccess = item.exit_code === 0 || item.exit_code === 23 || item.exit_code === 24;
+                    const statusTag = isSuccess
+                        ? '<span class="tag-success">成功</span>'
+                        : '<span class="tag-fail">失败 (' + item.exit_code + ')</span>';
+                    return '<tr><td>' + (item.start_time||'-') + '</td><td>' + (item.end_time||'-') +
+                        '</td><td>' + duration + '</td><td>' + (item.files_transferred||'-') +
+                        '</td><td>' + (item.total_size||'-') + '</td><td>' + statusTag + '</td></tr>';
+                }).join('');
+            } catch (e) {
+                console.error('获取历史失败:', e);
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds && seconds !== 0) return '-';
+            if (seconds < 60) return seconds + '秒';
+            if (seconds < 3600) return Math.floor(seconds/60) + '分' + (seconds%60) + '秒';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            return h + '时' + m + '分';
+        }
+
+        // ========== 触发同步 ==========
+        async function triggerSync() {
+            if (!currentTaskId) return;
+            const btn = document.getElementById('btnSync');
+            btn.disabled = true;
+            btn.innerHTML = '&#9203; 启动中...';
+
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/trigger', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    setTimeout(refreshTask, 1000);
+                } else {
+                    showToast(data.message, 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = '&#9654; 手动触发同步';
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+                btn.disabled = false;
+                btn.innerHTML = '&#9654; 手动触发同步';
+            }
+        }
+
+        // ========== 新建任务 ==========
+        function showCreateModal() {
+            document.getElementById('createModal').classList.add('show');
+        }
+
+        function hideCreateModal() {
+            document.getElementById('createModal').classList.remove('show');
+        }
+
+        async function createTask() {
+            const taskId = document.getElementById('newTaskId').value.trim();
+            const taskName = document.getElementById('newTaskName').value.trim();
+            if (!taskId) { showToast('请填写任务ID', 'error'); return; }
+            if (!taskName) { showToast('请填写任务名称', 'error'); return; }
+
+            const payload = {
+                id: taskId,
+                name: taskName,
+                source_host: document.getElementById('newSourceHost').value.trim(),
+                source_user: document.getElementById('newSourceUser').value.trim(),
+                source_path: document.getElementById('newSourcePath').value.trim(),
+                dest_path: document.getElementById('newDestPath').value.trim(),
+                ssh_port: document.getElementById('newSSHPort').value.trim(),
+                bandwidth_limit: document.getElementById('newBwLimit').value.trim(),
+                bandwidth_enabled: document.getElementById('newBwLimit').value.trim() === '0' ? 'false' : 'true',
+                timeout: '300',
+                max_retries: '3'
+            };
+
+            try {
+                const res = await fetch('/api/tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    hideCreateModal();
+                    // 清空表单
+                    document.getElementById('newTaskId').value = '';
+                    document.getElementById('newTaskName').value = '';
+                    document.getElementById('newSourcePath').value = '';
+                    document.getElementById('newDestPath').value = '';
+                    await loadTasks();
+                    selectTask(taskId);
+                } else {
+                    showToast(data.message, 'error');
+                }
+            } catch (e) {
+                showToast('创建失败: ' + e.message, 'error');
+            }
+        }
+
+        // ========== 删除任务 ==========
+        async function deleteCurrentTask() {
+            if (!currentTaskId) return;
+            const task = tasksData.find(t => t.id === currentTaskId);
+            const name = task ? task.name : currentTaskId;
+            if (!confirm('确定要删除任务 "' + name + '" 吗？（配置文件将被删除，日志保留）')) return;
+
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    currentTaskId = null;
+                    await loadTasks();
+                } else {
+                    showToast(data.message, 'error');
+                }
+            } catch (e) {
+                showToast('删除失败: ' + e.message, 'error');
+            }
+        }
+
+        // ========== 配置编辑器 ==========
+        function toggleConfigEditor() {
+            const body = document.getElementById('configEditorBody');
+            const icon = document.getElementById('configCollapseIcon');
+            const isOpen = body.classList.contains('open');
+            if (isOpen) {
+                body.classList.remove('open');
+                icon.classList.remove('open');
+            } else {
+                body.classList.add('open');
+                icon.classList.add('open');
+                reloadConfig();
+            }
+        }
+
+        async function reloadConfig() {
+            if (!currentTaskId) return;
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/config/raw');
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('configEditor').value = data.content;
+                    document.getElementById('configHint').textContent = '修改后点击保存，下次同步生效';
+                    document.getElementById('configHint').style.color = '#64748b';
+                } else {
+                    showToast('加载配置失败: ' + (data.message || ''), 'error');
+                }
+            } catch (e) {
+                showToast('加载配置失败: ' + e.message, 'error');
+            }
+        }
+
+        async function saveConfig() {
+            if (!currentTaskId) return;
+            const content = document.getElementById('configEditor').value;
+            const hint = document.getElementById('configHint');
+            try {
+                const res = await fetch('/api/tasks/' + currentTaskId + '/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: content })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    hint.textContent = '已保存 (' + new Date().toLocaleTimeString() + ')';
+                    hint.style.color = '#6ee7b7';
+                    refreshTask();
+                } else {
+                    showToast(data.message, 'error');
+                    hint.textContent = '保存失败';
+                    hint.style.color = '#fca5a5';
+                }
+            } catch (e) {
+                showToast('保存失败: ' + e.message, 'error');
+                hint.textContent = '保存失败';
+                hint.style.color = '#fca5a5';
+            }
+        }
+
+        // ========== 工具函数 ==========
+        function showToast(message, type) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast toast-' + type + ' show';
+            setTimeout(() => { toast.className = 'toast toast-' + type; }, 3000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ========== 文档 ==========
+        async function showDocs() {
+            document.getElementById('docsModal').classList.add('show');
+            try {
+                const res = await fetch('/api/readme');
+                const data = await res.json();
+                if (data.success && data.content) {
+                    if (typeof marked !== 'undefined') {
+                        document.getElementById('docsContent').innerHTML = marked.parse(data.content);
+                    } else {
+                        document.getElementById('docsContent').innerHTML = '<pre style="white-space:pre-wrap;">' + escapeHtml(data.content) + '</pre>';
+                    }
+                } else {
+                    document.getElementById('docsContent').innerHTML = '<p style="color:#94a3b8;">未找到 README.md</p>';
+                }
+            } catch (e) {
+                document.getElementById('docsContent').innerHTML = '<pre style="white-space:pre-wrap;color:#fca5a5;">加载失败: ' + e.message + '</pre>';
+            }
+        }
+
+        function hideDocs() {
+            document.getElementById('docsModal').classList.remove('show');
+        }
+    </script>
+</body>
+</html>
